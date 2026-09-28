@@ -5,6 +5,7 @@
 直接运行： python scan_upload.py  
   
 依赖： pip install httpx requests pycryptodome msgpack python-dateutil loguru  
+自动过码失败时会回退为控制台手动过码（按提示在浏览器完成验证后粘贴 validate）
 """  
   
 import os  
@@ -99,7 +100,7 @@ _captcha_header = {"Content-Type": "application/json",
                    "User-Agent": "pcrjjc2/1.0.0"}  
   
   
-async def captchaVerifier(*args):  
+async def captchaVerifier_auto(*args):  
     gt, challenge, userid = args[0], args[1], args[2]  
     async with httpx.AsyncClient(timeout=30) as ac:  
         res = (await ac.get(  
@@ -122,7 +123,41 @@ async def captchaVerifier(*args):
                 raise Exception("自动过码失败")  
             await asyncio.sleep(5)  
         raise Exception("自动过码多次失败")  
+
+MANUAL_CAPTCHA_TIMEOUT = 180   # 手动过码等待超时（秒）  
   
+  
+async def manual_captcha_console(gt, challenge, userid):  
+    """自动过码失败时，控制台手动过码。"""  
+    url = (f"https://help.tencentbot.top/geetest/?captcha_type=1"  
+           f"&challenge={challenge}&gt={gt}&userid={userid}&gs=1")  
+    print("\n" + "=" * 60)  
+    print("自动过码失败，请手动完成验证：")  
+    print(f"1. 在浏览器打开： {url}")  
+    print("2. 完成验证后，复制第一个方框中的内容（validate）粘贴到此处")  
+    print("=" * 60)  
+    loop = asyncio.get_event_loop()  
+    try:  
+        validate = await asyncio.wait_for(  
+            loop.run_in_executor(None, input, "请输入validate: "),  
+            timeout=MANUAL_CAPTCHA_TIMEOUT)  
+    except asyncio.TimeoutError:  
+        raise Exception("手动过码超时，取消登录")  
+    validate = validate.strip()  
+    if not validate:  
+        raise Exception("未输入validate，手动过码取消")  
+    return challenge, userid, validate  
+  
+  
+async def captchaVerifier(*args):  
+    """先自动过码，失败则回退到控制台手动过码。"""  
+    gt, challenge, userid = args[0], args[1], args[2]  
+    try:  
+        return await asyncio.wait_for(  
+            captchaVerifier_auto(*args), timeout=120)  
+    except Exception as e:  
+        logger.warning(f"自动过码失败({e})，转为手动过码")  
+        return await manual_captcha_console(gt, challenge, userid)  
   
 # ============================================================  
 # 5. 工具：找会战币  
